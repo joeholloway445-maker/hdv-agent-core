@@ -36,9 +36,7 @@ export class MemoryBus {
   push(from: AgentId, content: any, tags: string[] = []): MemoryRecord {
     const allowed = MemoryBus.ALLOWED[from] || [];
     if (allowed.length === 0 && from !== "HOPE") {
-      if (from !== "HOPE") {
-        throw new Error(`[MemoryBus] Illegal downward or lateral write attempt from ${from}`);
-      }
+      throw new Error(`[MemoryBus] Illegal downward or lateral write attempt from ${from}`);
     }
 
     const record: MemoryRecord = {
