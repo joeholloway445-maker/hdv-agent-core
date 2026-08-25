@@ -86,3 +86,90 @@ test("process() handles many legal records without throwing", async () => {
   const knoll = new KnollAgent(bus);
   await assert.doesNotReject(() => knoll.process({}));
 });
+
+// ---------------------------------------------------------------------------
+// E. Violation detection — below threshold (warning, not FREEZE)
+// ---------------------------------------------------------------------------
+
+test("single illegal record produces audit warning, not FREEZE", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hdv-knoll-viol-"));
+  // Pre-seed 9 legal DREAM records via bus, then inject 1 illegal record directly
+  const bus = new (await import("../src/memory/MemoryBus")).MemoryBus(dir);
+  for (let i = 0; i < 9; i++) bus.push("DREAM", { i });
+
+  // Inject one illegal record: HOPE→DREAM (HOPE is not allowed to write anywhere)
+  fs.writeFileSync(path.join(dir, "illegal-001.json"), JSON.stringify({
+    id: "illegal-001",
+    from: "HOPE",
+    to: "DREAM",
+    timestamp: Date.now(),
+    content: {},
+    tags: [],
+  }));
+
+  // Load fresh bus so it picks up the injected file
+  const bus2 = new (await import("../src/memory/MemoryBus")).MemoryBus(dir);
+  const knoll = new KnollAgent(bus2);
+
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const origWarn = console.warn.bind(console);
+  const origError = console.error.bind(console);
+  console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+  console.error = (...args: unknown[]) => errors.push(args.join(" "));
+
+  try {
+    await knoll.process({});
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+  }
+
+  assert.ok(warnings.some((w) => w.includes("violation") || w.includes("Audit")), "expected audit warning");
+  assert.equal(errors.filter((e) => e.includes("FREEZE")).length, 0, "should not FREEZE below threshold");
+});
+
+// ---------------------------------------------------------------------------
+// F. Violation detection — at/above threshold triggers FREEZE
+// ---------------------------------------------------------------------------
+
+test("majority illegal records triggers SYSTEM FREEZE error", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hdv-knoll-freeze-"));
+
+  // Inject 4 illegal records + 2 legal = 4/6 ≈ 67% >> 34% threshold
+  for (let i = 0; i < 4; i++) {
+    fs.writeFileSync(path.join(dir, `illegal-${i}.json`), JSON.stringify({
+      id: `illegal-${i}`,
+      from: "HOPE",
+      to: "DREAM",
+      timestamp: Date.now() + i,
+      content: {},
+      tags: [],
+    }));
+  }
+  for (let i = 0; i < 2; i++) {
+    fs.writeFileSync(path.join(dir, `legal-${i}.json`), JSON.stringify({
+      id: `legal-${i}`,
+      from: "DREAM",
+      to: "VISION",
+      timestamp: Date.now() + 100 + i,
+      content: {},
+      tags: [],
+    }));
+  }
+
+  const bus = new (await import("../src/memory/MemoryBus")).MemoryBus(dir);
+  const knoll = new KnollAgent(bus);
+
+  const errors: string[] = [];
+  const origError = console.error.bind(console);
+  console.error = (...args: unknown[]) => errors.push(args.join(" "));
+
+  try {
+    await knoll.process({});
+  } finally {
+    console.error = origError;
+  }
+
+  assert.ok(errors.some((e) => e.includes("FREEZE")), "expected SYSTEM FREEZE at high violation rate");
+});
