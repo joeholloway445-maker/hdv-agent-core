@@ -5,14 +5,14 @@ import { HopeAgent } from "./agents/Hope";
 import { VisionAgent } from "./agents/Vision";
 import { DreamAgent } from "./agents/Dream";
 import { KnollAgent } from "./agents/Knoll";
-import { ApexAgent } from "./agents/Apex";
+import { ApexAgent, heuristicRoute } from "./agents/Apex";
 import { HapticClient } from "./haptic/HapticClient";
 import { WorldModel } from "./world/WorldModel";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface InboundMessage {
-  type: "cycle" | "memory_read" | "ping";
+  type: "cycle" | "memory_read" | "ping" | "workflow_trigger" | "workflow_route";
   requestId?: string;
   payload?: Record<string, unknown>;
 }
@@ -117,6 +117,69 @@ wss.on("connection", (ws) => {
         try {
           const result = await runCycle(payload);
           send(ws, { type: "cycle_result", requestId, data: result });
+        } catch (err) {
+          send(ws, { type: "error", requestId, error: String(err) });
+        }
+        break;
+      }
+
+      case "workflow_route": {
+        // Pure MoE routing decision — no network call
+        const intent = String(payload.intent ?? "");
+        const category = String(payload.category ?? "general");
+        const budgetTier = (payload.budgetTier ?? "medium") as "low" | "medium" | "high";
+        const model = heuristicRoute(intent, category, budgetTier);
+        send(ws, {
+          type: "cycle_result",
+          requestId,
+          data: {
+            model,
+            category,
+            budgetTier,
+            reasoning: `Heuristic: category="${category}" budget="${budgetTier}" → ${model}`,
+          },
+        });
+        break;
+      }
+
+      case "workflow_trigger": {
+        // KNOLL-validate payload, then proxy to hdv-orchestrator VISION runtime
+        const orchestratorUrl = (process.env.WORKFLOW_API_URL ?? "").replace(/\/$/, "");
+        const orchestratorKey = process.env.WORKFLOW_API_KEY ?? "";
+
+        if (!orchestratorUrl || !orchestratorKey) {
+          send(ws, {
+            type: "error",
+            requestId,
+            error: "WORKFLOW_API_URL or WORKFLOW_API_KEY not configured",
+          });
+          break;
+        }
+
+        const intent = String(payload.intent ?? "");
+        const category = String(payload.category ?? "general");
+        const budgetTier = (payload.budgetTier ?? "medium") as "low" | "medium" | "high";
+        const moeModel = heuristicRoute(intent, category, budgetTier);
+        const workflowId = payload.workflowId;
+
+        try {
+          const res = await fetch(`${orchestratorUrl}/workflows/${workflowId}/run`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${orchestratorKey}`,
+            },
+            body: JSON.stringify({
+              triggerData: {
+                ...payload,
+                moeModel,
+                moeCategory: category,
+                moeBudgetTier: budgetTier,
+              },
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          send(ws, { type: "cycle_result", requestId, data: { moeModel, ...data } });
         } catch (err) {
           send(ws, { type: "error", requestId, error: String(err) });
         }
