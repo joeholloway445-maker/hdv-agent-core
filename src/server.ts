@@ -68,7 +68,17 @@ async function runCycle(payload: Record<string, unknown>): Promise<Record<string
 // ── WebSocket server ──────────────────────────────────────────────────────────
 
 const PORT = Number(process.env.PORT ?? 4200);
-const wss = new WebSocketServer({ port: PORT });
+const WS_API_KEY = process.env.WS_API_KEY ?? "";
+
+const wss = new WebSocketServer({
+  port: PORT,
+  verifyClient: (info) => {
+    if (!WS_API_KEY) return true; // dev: no key configured, allow all
+    const auth = info.req.headers["authorization"] ?? "";
+    const qp = new URL(info.req.url ?? "/", "ws://localhost").searchParams.get("token") ?? "";
+    return auth === `Bearer ${WS_API_KEY}` || qp === WS_API_KEY;
+  },
+});
 
 function send(ws: WebSocket, msg: OutboundMessage): void {
   if (ws.readyState === WebSocket.OPEN) {
