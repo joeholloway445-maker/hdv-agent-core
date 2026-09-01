@@ -72,7 +72,7 @@ const WS_API_KEY = process.env.WS_API_KEY ?? "";
 
 const wss = new WebSocketServer({
   port: PORT,
-  verifyClient: (info) => {
+  verifyClient: (info: { req: { headers: Record<string, string | string[] | undefined>; url?: string } }) => {
     if (!WS_API_KEY) return true; // dev: no key configured, allow all
     const auth = info.req.headers["authorization"] ?? "";
     const qp = new URL(info.req.url ?? "/", "ws://localhost").searchParams.get("token") ?? "";
@@ -178,7 +178,7 @@ wss.on("connection", (ws) => {
               },
             }),
           });
-          const data = await res.json().catch(() => ({}));
+          const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
           send(ws, { type: "cycle_result", requestId, data: { moeModel, ...data } });
         } catch (err) {
           send(ws, { type: "error", requestId, error: String(err) });
